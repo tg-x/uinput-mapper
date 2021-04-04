@@ -1,5 +1,6 @@
 # encoding: utf-8
 import cinput
+from linux_input import input_event
 
 """
 Module to help out with config parsing and input mapping
@@ -50,12 +51,16 @@ def pretty_conf_print(c):
     for k, v in c.iteritems():
         print 'Input:', k[0], 'Type:', cinput.rev_events[k[1]]
         for kk, vv in v.iteritems():
-            n_ev_d, n_ev_t = vv['type']
+            n_ev_d, n_ev_t = vv['type'] if 'type' in vv else k
             print ' ' * 4,
             print cinput.rev_event_keys[k[1]][kk],
-            print ' → ([%d, %s], %s)' % (n_ev_d,
+            print ' → ([%d, %s], %s)' % (
+                n_ev_d,
                 cinput.rev_events[n_ev_t],
-                cinput.rev_event_keys[n_ev_t][vv['code']])
+                cinput.rev_event_keys[n_ev_t][vv['code']]
+                    if 'code' in vv and type(vv['code']) is int
+                    else '|'.join(map(lambda code: cinput.rev_event_keys[n_ev_t][code], vv['codes'])) #type(vv['code'])
+            )
 
             if n_ev_t == cinput.EV_ABS:
                 print 'Properties: Max: %d Min: %d Fuzz: %d Flat: %d' % (
@@ -68,9 +73,9 @@ def get_exported_device_count(c):
     (Rather simple at the moment)
     """
     m = 0
-    for _, v in c.iteritems():
+    for k, v in c.iteritems():
         for _, o in v.iteritems():
-            m = max(m, o['type'][0])
+            m = max(m, o['type'][0] if 'type' in o else k[0])
 
     return m + 1
 
@@ -86,19 +91,35 @@ class KeyMapper(object):
         """
         _type = ev.type
         ofd = fd
+        codes = None
 
         if (fd, _type) in self._config:
             typemaps = self._config[(fd, _type)]
             if ev.code in typemaps:
                 info = typemaps[ev.code]
-                ofd, ev.type = info['type']
-                ev.code = info['code']
-                if info['value'] is not None:
+                if 'type' in info:
+                    ofd, ev.type = info['type']
+                else:
+                    ofd = fd
+                if 'code' not in info and 'codes' in info:
+                    codes = info['codes']
+                else:
+                    if type(info['code']) is int:
+                        ev.code = info['code']
+                    else:
+                        ev.code = info['code'](info['codes'])
+                if 'value' in info and info['value'] is not None:
                     ev.value = info['value'](ev.value)
                 else:
                     ev.value = ev.value
 
-        return ofd, ev
+        evs = []
+        if codes is None:
+            evs = [ev]
+        else:
+            for code in codes:
+                evs.append(input_event(ev.time, ev.type, code, ev.value))
+        return ofd, evs
 
     def expose(self, d, fd):
         """
@@ -107,13 +128,21 @@ class KeyMapper(object):
         """
         for (n, evt), v in self._config.iteritems():
             for code, dat in v.iteritems():
-                ofd, t = dat['type']
+                if 'type' in dat:
+                    ofd, t = dat['type']
+                else:
+                    ofd, t = n, evt
                 if ofd != fd:
                     continue
                 d.expose_event_type(t)
-                d.expose_event(t, dat['code'])
 
-                if t == cinput.EV_ABS:
-                    p = dat['prop']
-                    d.set_absprop(dat['code'], _max=p['max'], _min=p['min'],
-                            fuzz=p['fuzz'], flat=p['flat'])
+                codes = dat['codes'] if 'codes' in dat else []
+                if 'code' in dat and type(dat['code']) is int:
+                    codes.append(dat['code'])
+                for c in codes:
+                    d.expose_event(t, c)
+
+                    if t == cinput.EV_ABS:
+                        p = dat['prop']
+                        d.set_absprop(c, _max=p['max'], _min=p['min'],
+                                      fuzz=p['fuzz'], flat=p['flat'])

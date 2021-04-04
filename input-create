@@ -76,12 +76,13 @@ while True:
         ti = timeval(ev_p[0], ev_p[1])
         ev = input_event(ti, ev_p[2], ev_p[3], ev_p[4])
 
-    idx, ev = m.map_event(ev, fd)
+    idx, evs = m.map_event(ev, fd)
     d = ofs[idx]
 
     # Sync always to all devices?
-    if args.sync and ev.type == EV_SYN and ev.code == SYN_REPORT and ev.value == 0:
-        for fd in ofs:
-            fd.fire_event(ev)
-    else:
-        d.fire_event(ev)
+    for ev in evs:
+        if args.sync and ev.type == EV_SYN and ev.code == SYN_REPORT and ev.value == 0:
+            for fd in ofs:
+                fd.fire_event(ev)
+        else:
+            d.fire_event(ev)
